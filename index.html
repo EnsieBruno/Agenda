@@ -1,0 +1,457 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  Calendar, 
+  ChevronLeft, 
+  ChevronRight, 
+  Plus, 
+  Copy, 
+  Trash2, 
+  GripVertical,
+  Coffee,
+  Sun,
+  Moon,
+  Cloud,
+  CheckCircle2,
+  Pencil
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  signInWithCustomToken, 
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  setDoc, 
+  onSnapshot, 
+  deleteDoc 
+} from 'firebase/firestore';
+
+// --- Configuração do Firebase ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'cozy-planner-app';
+
+const DAYS_OF_WEEK = [
+  'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'
+];
+
+const MONTHS = [
+  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+];
+
+const PERIODS = [
+  { id: 'manha', label: 'Manhã', icon: <Coffee size={14} /> },
+  { id: 'tarde', label: 'Tarde', icon: <Sun size={14} /> },
+  { id: 'noite', label: 'Noite', icon: <Moon size={14} /> },
+];
+
+// --- Componente do Mascote (Gatinho Preto) ---
+const FancyCat = () => {
+  return (
+    <div className="fixed bottom-4 right-8 pointer-events-none z-50 flex flex-col items-center">
+      {/* Balão de Fala animado */}
+      <div className="speech-bubble mb-2 px-4 py-2 bg-white rounded-2xl shadow-md border-2 border-[#E8DFCA] text-xs font-bold text-[#5D534A] relative">
+        Miau Miau! ✨
+        <div className="bubble-tail absolute -bottom-2 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-r-2 border-b-2 border-[#E8DFCA] rotate-45"></div>
+      </div>
+
+      {/* Ilustração do Gato em SVG com animações complexas */}
+      <div className="cat-wrapper scale-125">
+        <svg width="100" height="80" viewBox="0 0 100 80" fill="none" xmlns="http://www.w3.org/2000/svg" className="cat-svg">
+          <ellipse cx="50" cy="70" rx="25" ry="5" fill="black" fillOpacity="0.05" />
+          
+          <g className="cat-body-group">
+            <path className="cat-tail-wag" d="M70 50C85 50 90 40 85 30" stroke="#2D2D2D" strokeWidth="6" strokeLinecap="round" fill="none"/>
+            <rect x="25" y="40" width="50" height="25" rx="12" fill="#2D2D2D" />
+            
+            <circle cx="35" cy="65" r="4" fill="#2D2D2D" />
+            <circle cx="45" cy="65" r="4" fill="#2D2D2D" />
+            <circle cx="55" cy="65" r="4" fill="#2D2D2D" />
+            <circle cx="65" cy="65" r="4" fill="#2D2D2D" />
+            
+            <g className="cat-head-group">
+              <circle cx="30" cy="35" r="15" fill="#2D2D2D" />
+              <path d="M18 25L22 10L30 22" fill="#2D2D2D" />
+              <path d="M30 22L38 10L42 25" fill="#2D2D2D" />
+              <path d="M22 15L25 22L20 20" fill="#FFB7B7" opacity="0.6" />
+              <path d="M38 15L35 22L40 20" fill="#FFB7B7" opacity="0.6" />
+
+              <circle cx="24" cy="35" r="2.5" fill="#EAB308" className="cat-eye" />
+              <circle cx="36" cy="35" r="2.5" fill="#EAB308" className="cat-eye" />
+              <circle cx="24.5" cy="34.5" r="1" fill="black" />
+              <circle cx="36.5" cy="34.5" r="1" fill="black" />
+
+              <circle cx="30" cy="40" r="1.5" fill="#FFB7B7" />
+              <line x1="20" y1="40" x2="10" y2="38" stroke="#E8DFCA" strokeWidth="0.5" />
+              <line x1="20" y1="42" x2="10" y2="45" stroke="#E8DFCA" strokeWidth="0.5" />
+              <line x1="40" y1="40" x2="50" y2="38" stroke="#E8DFCA" strokeWidth="0.5" />
+              <line x1="40" y1="42" x2="50" y2="45" stroke="#E8DFCA" strokeWidth="0.5" />
+
+              <path className="cat-tongue" d="M28 44Q30 48 32 44" fill="#FFB7B7" opacity="0" />
+            </g>
+          </g>
+        </svg>
+      </div>
+    </div>
+  );
+};
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [tasks, setTasks] = useState([]);
+  const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
+  const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+  const [currentWeek, setCurrentWeek] = useState(1);
+  const [draggedTaskId, setDraggedTaskId] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState(null);
+  const [taskForm, setTaskForm] = useState({ title: '', day: 'Segunda', period: 'manha' });
+
+  // Regra 3: Autenticação antes das consultas
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // Regra 1 e 2: Sincronização com Firestore
+  useEffect(() => {
+    if (!user) return;
+    const tasksCollection = collection(db, 'artifacts', appId, 'users', user.uid, 'tasks');
+    const unsubscribe = onSnapshot(tasksCollection, (snapshot) => {
+      const tasksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setTasks(tasksData);
+    }, (error) => console.error("Firestore Error:", error));
+    return () => unsubscribe();
+  }, [user]);
+
+  const filteredTasks = useMemo(() => {
+    return tasks.filter(t => 
+      t.month === currentMonth && 
+      t.year === currentYear && 
+      t.week === currentWeek
+    );
+  }, [tasks, currentMonth, currentYear, currentWeek]);
+
+  const saveTask = async (taskData) => {
+    if (!user) return;
+    const taskId = taskData.id || crypto.randomUUID();
+    const taskDoc = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId);
+    await setDoc(taskDoc, {
+      ...taskData,
+      id: taskId,
+      month: currentMonth,
+      year: currentYear,
+      week: currentWeek,
+      updatedAt: Date.now()
+    });
+  };
+
+  const handleDeleteTask = async (taskId) => {
+    if (!user) return;
+    const taskDoc = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId);
+    await deleteDoc(taskDoc);
+    setIsModalOpen(false);
+  };
+
+  const handleOpenCreateModal = (day) => {
+    setEditingTaskId(null);
+    setTaskForm({ title: '', day, period: 'manha' });
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEditModal = (task) => {
+    setEditingTaskId(task.id);
+    setTaskForm({ title: task.title, day: task.day, period: task.period });
+    setIsModalOpen(true);
+  };
+
+  const handleSaveTask = () => {
+    if (!taskForm.title.trim()) return;
+    const taskData = editingTaskId ? { ...taskForm, id: editingTaskId } : taskForm;
+    saveTask(taskData);
+    setIsModalOpen(false);
+  };
+
+  const duplicateTask = (task) => {
+    const { id, ...rest } = task;
+    saveTask({ ...rest, title: rest.title });
+  };
+
+  const onDragStart = (e, id) => {
+    setDraggedTaskId(id);
+    e.dataTransfer.setData('taskId', id);
+  };
+
+  const onDrop = (e, day) => {
+    const id = e.dataTransfer.getData('taskId');
+    const task = tasks.find(t => t.id === id);
+    if (task) {
+      saveTask({ ...task, day });
+    }
+    setDraggedTaskId(null);
+  };
+
+  const changeMonth = (offset) => {
+    let newMonth = currentMonth + offset;
+    let newYear = currentYear;
+    if (newMonth > 11) {
+      newMonth = 0;
+      newYear++;
+    } else if (newMonth < 0) {
+      newMonth = 11;
+      newYear--;
+    }
+    setCurrentMonth(newMonth);
+    setCurrentYear(newYear);
+  };
+
+  const getCardStyle = (period) => {
+    switch (period) {
+      case 'manha': return 'bg-[#E0F2FE] border-[#BAE6FD] text-[#0369A1]';
+      case 'tarde': return 'bg-[#FFEDD5] border-[#FED7AA] text-[#9A3412]';
+      case 'noite': return 'bg-[#1E293B] border-[#334155] text-[#F8FAFC]';
+      default: return 'bg-white border-[#E8DFCA] text-[#5D534A]';
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#FDF6EC] text-[#5D534A] font-sans p-4 overflow-hidden flex flex-col relative">
+      {/* Cabeçalho */}
+      <header className="max-w-full mx-auto w-full flex flex-col md:flex-row items-center justify-between mb-4 gap-4 px-2 z-10">
+        <div className="flex items-center gap-3">
+          <div className="bg-[#B8E2F2] p-2 rounded-xl shadow-sm border border-white">
+            <Calendar className="text-[#4A90B0]" size={24} />
+          </div>
+          <h1 className="text-xl font-bold tracking-tight text-[#4F6F52]">Minha Agenda</h1>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="flex items-center bg-white/60 backdrop-blur-md p-1.5 rounded-xl border border-white">
+            <button onClick={() => changeMonth(-1)} className="p-1 hover:bg-white rounded-lg transition-all">
+              <ChevronLeft size={18} />
+            </button>
+            <div className="px-4 font-bold text-sm min-w-[140px] text-center">
+              {MONTHS[currentMonth]} {currentYear}
+            </div>
+            <button onClick={() => changeMonth(1)} className="p-1 hover:bg-white rounded-lg transition-all">
+              <ChevronRight size={18} />
+            </button>
+          </div>
+
+          <div className="flex gap-1 bg-[#E8DFCA]/30 p-1 rounded-xl">
+            {[1, 2, 3, 4].map(w => (
+              <button
+                key={w}
+                onClick={() => setCurrentWeek(w)}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                  currentWeek === w ? 'bg-white text-[#4F6F52] shadow-sm' : 'text-[#8A817C] hover:bg-white/40'
+                }`}
+              >
+                Q{w}
+              </button>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      {/* Área Principal (Kanban) */}
+      <main className="flex-1 overflow-x-auto pb-16 z-10">
+        <div className="flex gap-3 min-w-[1100px] h-full px-2">
+          {DAYS_OF_WEEK.map(day => (
+            <div 
+              key={day}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => onDrop(e, day)}
+              className="flex-1 min-w-[150px] flex flex-col bg-white/30 rounded-[1.5rem] border-2 border-[#E8DFCA] p-3 transition-all backdrop-blur-sm"
+            >
+              <div className="flex items-center justify-between mb-3 px-1">
+                <h2 className="font-bold text-sm flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#D4E7C5]"></span>
+                  {day}
+                </h2>
+                <button 
+                  onClick={() => handleOpenCreateModal(day)}
+                  className="w-6 h-6 flex items-center justify-center bg-[#D4E7C5] text-[#4F6F52] rounded-full hover:rotate-90 transition-all shadow-sm"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+
+              <div className="flex-1 space-y-2 overflow-y-auto pr-1 custom-scrollbar pb-4">
+                {filteredTasks
+                  .filter(t => t.day === day)
+                  .map(task => (
+                    <div
+                      key={task.id}
+                      draggable
+                      onDragStart={(e) => onDragStart(e, task.id)}
+                      onDoubleClick={() => handleOpenEditModal(task)}
+                      className={`group relative p-3 rounded-2xl border shadow-sm cursor-grab active:cursor-grabbing transition-all hover:scale-[1.03] ${getCardStyle(task.period)} ${draggedTaskId === task.id ? 'opacity-20' : ''}`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <GripVertical size={12} className="mt-0.5 opacity-20 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                        <div className="flex-1 overflow-hidden">
+                          <p className="text-xs font-bold leading-tight break-words pr-5">{task.title}</p>
+                        </div>
+                      </div>
+
+                      <div className="absolute top-1 right-1 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-all bg-black/5 rounded-lg p-0.5 backdrop-blur-sm">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); duplicateTask(task); }} 
+                          className="p-1 hover:bg-black/10 rounded-md"
+                          title="Duplicar"
+                        >
+                          <Copy size={11} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                
+                {filteredTasks.filter(t => t.day === day).length === 0 && (
+                  <div className="flex flex-col items-center justify-center h-20 opacity-10 select-none">
+                    <Cloud size={24} />
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </main>
+
+      {/* Mascote */}
+      <FancyCat />
+
+      {/* Modal de Tarefa */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-[#5D534A]/30 backdrop-blur-sm flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-[2rem] shadow-2xl p-8 w-full max-w-sm border-[4px] border-[#F9F3CC]">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-bold text-[#4F6F52] flex items-center gap-2">
+                {editingTaskId ? <Pencil size={20} /> : <Plus size={20} />}
+                {editingTaskId ? 'Editar Atividade' : 'Nova Atividade'}
+              </h3>
+              {editingTaskId && (
+                <button 
+                  onClick={() => handleDeleteTask(editingTaskId)}
+                  className="p-2 text-red-400 hover:bg-red-50 rounded-xl transition-colors"
+                >
+                  <Trash2 size={20} />
+                </button>
+              )}
+            </div>
+            
+            <div className="space-y-5">
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-[#8A817C] mb-2 ml-1">Descrição</label>
+                <input 
+                  autoFocus
+                  type="text"
+                  value={taskForm.title}
+                  onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })}
+                  placeholder="O que vamos fazer?"
+                  className="w-full bg-[#FDF6EC] border-2 border-[#E8DFCA] rounded-xl px-4 py-3 text-md focus:outline-none focus:border-[#D4E7C5]"
+                  onKeyDown={(e) => e.key === 'Enter' && handleSaveTask()}
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-[#8A817C] mb-2 ml-1">Momento do dia</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {PERIODS.map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => setTaskForm({ ...taskForm, period: p.id })}
+                      className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all ${
+                        taskForm.period === p.id 
+                        ? 'border-[#D4E7C5] bg-[#D4E7C5]/10 text-[#4F6F52]' 
+                        : 'border-[#E8DFCA] opacity-50'
+                      }`}
+                    >
+                      <div className="mb-1">{p.icon}</div>
+                      <span className="text-[10px] font-bold">{p.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-8">
+              <button 
+                onClick={() => setIsModalOpen(false)} 
+                className="flex-1 py-3 text-xs font-bold text-[#8A817C] hover:bg-[#FDF6EC] rounded-xl"
+              >
+                Voltar
+              </button>
+              <button 
+                onClick={handleSaveTask}
+                className="flex-[2] bg-[#D4E7C5] text-[#4F6F52] py-3 rounded-xl font-bold shadow-sm text-xs hover:bg-[#B5C99A] transition-all"
+              >
+                {editingTaskId ? 'Salvar' : 'Agendar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Estilos Globais e Animações */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        @import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap');
+        
+        body { font-family: 'Quicksand', sans-serif; background-color: #FDF6EC; }
+        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #E8DFCA; border-radius: 10px; }
+
+        .cat-svg { animation: idle-float 4s ease-in-out infinite; }
+        .cat-tail-wag { animation: tail-wag 2s ease-in-out infinite alternate; transform-origin: left; }
+        .cat-eye { animation: blink 5s infinite; }
+        .cat-body-group { animation: cat-cycle 15s infinite; transform-origin: center center; }
+        .cat-tongue { animation: tongue-lick 15s infinite; }
+        .speech-bubble { animation: bubble-fade 8s infinite; }
+
+        @keyframes idle-float {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-5px); }
+        }
+        @keyframes tail-wag {
+          from { transform: rotate(-10deg); }
+          to { transform: rotate(10deg); }
+        }
+        @keyframes blink {
+          0%, 90%, 100% { transform: scaleY(1); }
+          95% { transform: scaleY(0.1); }
+        }
+        @keyframes bubble-fade {
+          0%, 5%, 35%, 100% { opacity: 0; transform: translateY(5px) scale(0.8); }
+          10%, 30% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes tongue-lick {
+          0%, 40%, 46%, 100% { opacity: 0; transform: translateY(0); }
+          41%, 45% { opacity: 1; transform: translateY(2px); }
+        }
+        @keyframes cat-cycle {
+          0%, 35% { transform: rotate(0) scale(1); }
+          40%, 50% { transform: rotate(-5deg); }
+          55%, 70% { transform: rotate(360deg) scale(1.1); }
+          75%, 100% { transform: rotate(0) scale(1); }
+        }
+        * { -webkit-tap-highlight-color: transparent; }
+      `}} />
+    </div>
+  );
+}
